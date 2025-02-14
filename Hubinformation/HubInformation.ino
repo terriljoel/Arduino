@@ -83,7 +83,8 @@ void portValueChangeCallback(void *hub, byte portNumber, DeviceType deviceType, 
   }
 
   if (deviceType == DeviceType::UNKNOWNDEVICE) {
-    double current = myHub->parsePortMessage(pData);
+    // double current =
+     myHub->parsePortMessage(pData);
     Serial.print("Test read: ");
     // Serial.println(pData);
     for (size_t i = 0; i < 5; i++) {
