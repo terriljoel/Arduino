@@ -248,6 +248,7 @@ void loop() {
       lcd.print("            ");
       lcd.setCursor(0, 0);
       lcd.print("DISCONNECTED");
+      Serial.println(myTrainHub.getModeForDeviceType((byte)DeviceType::TRAIN_MOTOR));
       flag_connect = 1;
     }
   }
