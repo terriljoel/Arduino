@@ -14,6 +14,7 @@
 // create a hub instance
 Lpf2Hub myTrainHub;
 byte port = (byte)PoweredUpHubPort::A;
+byte port2 = (byte)PoweredUpHubPort::B;
 // char input;
 const int rs = 10, en = 11, d4 = 6, d5 = 7, d6 = 8, d7 = 9, buttonPinS = 2, buttonPinU = 4, buttonPinD = 3, buttonPinDC = 5;
 
@@ -89,39 +90,26 @@ void hubPropertyChangeCallback(void *hub, HubPropertyReference hubProperty, uint
   }
 }
 
-void portValueChangeCallback(void *hub, byte portNumber, DeviceType deviceType, uint8_t *pData) {
+void tachoMotorCallback(void *hub, byte portNumber, DeviceType deviceType, uint8_t *pData) {
   Lpf2Hub *myHub = (Lpf2Hub *)hub;
-  Serial.println("Port Value changed");
-  if (deviceType == DeviceType::VOLTAGE_SENSOR) {
-    double voltage = myHub->parseVoltageSensor(pData);
-    Serial.print("Voltage: ");
-    Serial.println(voltage, 2);
-    return;
-  }
 
-  if (deviceType == DeviceType::TRAIN_MOTOR) {
-    // char current[MAX]= myHub->parsePortMessage(pData);
-    Serial.print("test: Hello world ");
-    // Serial.println(myHub->parseSpeedometer(pData));
-    return;
-  }
-  if (deviceType == DeviceType::UNKNOWNDEVICE) {
-    // double current =
-    myHub->parsePortMessage(pData);
-    Serial.print("Test read: ");
-    // Serial.println(pData);
-    for (size_t i = 0; i < 5; i++) {
-      Serial.println(pData[i]);
-    }
-    return;
-
-  } else {
-    Serial.print("Test read: ");
-    for (size_t i = 0; i < 5; i++) {
-      Serial.println(pData[i]);
-    }
+  Serial.print("sensorMessage callback for port: ");
+  Serial.println(portNumber, DEC);
+  if (deviceType == DeviceType::TECHNIC_MEDIUM_ANGULAR_MOTOR) {
+    int rotation = myHub->parseTachoMotor(pData);
+    Serial.print("Rotation: ");
+    Serial.print(rotation, DEC);
+    Serial.println(" [degrees]");
+    myHub->setLedHSVColor(abs(rotation), 1.0, 1.0);
   }
 }
+
+// void portValueChangeCallback(void *hub, byte portNumber, DeviceType deviceType, uint8_t *pData) {
+//   Lpf2Hub *myHub = (Lpf2Hub *)hub;
+//   Serial.println("Port Value changed");
+//   Serial.print("Test read: ");
+//   return;
+// }
 
 void setup() {
   Serial.begin(115200);
@@ -156,7 +144,7 @@ void loop() {
   // connect flow. Search for BLE services and try to connect if the uuid of the hub is found
   if (myTrainHub.isConnecting()) {
     myTrainHub.connectHub();
-    if (myTrainHub.isConnected()) {
+    if (myTrainHub.isConnected() && !isInitialized) {
       lcd.setCursor(0, 0);
       lcd.print("            ");
       lcd.setCursor(0, 0);
@@ -168,18 +156,36 @@ void loop() {
       Serial.print("Hub name: ");
       Serial.println(myTrainHub.getHubName().c_str());
 
-      myTrainHub.activateHubPropertyUpdate(HubPropertyReference::ADVERTISING_NAME, hubPropertyChangeCallback);
-      delay(50);
-      myTrainHub.activateHubPropertyUpdate(HubPropertyReference::BATTERY_VOLTAGE, hubPropertyChangeCallback);
-      delay(50);
-      myTrainHub.activateHubPropertyUpdate(HubPropertyReference::BUTTON, hubPropertyChangeCallback);
-      delay(50);
-      myTrainHub.activateHubPropertyUpdate(HubPropertyReference::RSSI, hubPropertyChangeCallback);
+      // Serial.print("check ports... if needed sensor is already connected: ");
+      // byte portForDevice = myTrainHub.getPortForDeviceType((byte)DeviceType::TECHNIC_MEDIUM_ANGULAR_MOTOR);
+      // Serial.println(portForDevice, DEC);
+      // // check for expected port number where the device should be connected
+      // if (portForDevice == 1) {
+      //   Serial.println("activatePortDevice");
+      //   myTrainHub.activatePortDevice(port, tachoMotorCallback);
+      // }
+      // else{
+      //   Serial.println("not connected");
+      //   Serial.print("actual port ");
+      //   Serial.println(port);
+      // }
+
+      // myTrainHub.activateHubPropertyUpdate(HubPropertyReference::ADVERTISING_NAME, hubPropertyChangeCallback);
+      // delay(50);
+      // myTrainHub.activateHubPropertyUpdate(HubPropertyReference::BATTERY_VOLTAGE, hubPropertyChangeCallback);
+      // delay(50);
+      // myTrainHub.activateHubPropertyUpdate(HubPropertyReference::BUTTON, hubPropertyChangeCallback);
+      // delay(50);
+      // myTrainHub.activateHubPropertyUpdate(HubPropertyReference::RSSI, hubPropertyChangeCallback);
+
       delay(50);
       // myTrainHub.activatePortDevice((byte)MoveHubPort::TILT, portValueChangeCallback);
-      // delay(50);
-      myTrainHub.activatePortDevice((byte)PoweredUpHubPort::B, portValueChangeCallback);
       delay(50);
+      myTrainHub.registerPortDevice(port, (byte)DeviceType::TECHNIC_MEDIUM_ANGULAR_MOTOR);
+      delay(50);
+      myTrainHub.activatePortDevice(port, tachoMotorCallback);
+      // myTrainHub.activatePortDevice((byte)PoweredUpHubPort::A, (byte)DeviceType::TECHNIC_MEDIUM_ANGULAR_MOTOR, portValueChangeCallback);
+      // delay(50);
       // myTrainHub.activatePortDevice((byte)PoweredUpHubPort::VOLTAGE, portValueChangeCallback);
       isInitialized = true;
 
@@ -218,7 +224,6 @@ void loop() {
     }
   }
   if (myTrainHub.isConnected()) {
-
     if (strcmp(myTrainHub.getHubName().c_str(), hubName) != 0) {
       myTrainHub.setHubName(hubName);
       Serial.print("Hub name: ");
@@ -237,9 +242,11 @@ void loop() {
     if (speed == 0) {
       delay(50);
       myTrainHub.stopBasicMotor(port);
+      myTrainHub.stopTachoMotor(port2);
     } else {
       delay(50);
       myTrainHub.setBasicMotorSpeed(port, speed);
+      myTrainHub.setTachoMotorSpeed(port2, speed);
     }
   } else {
     if (flag_connect == 0) {
@@ -248,13 +255,12 @@ void loop() {
       lcd.print("            ");
       lcd.setCursor(0, 0);
       lcd.print("DISCONNECTED");
-      Serial.println(myTrainHub.getModeForDeviceType((byte)DeviceType::TRAIN_MOTOR));
       flag_connect = 1;
     }
   }
   lcd.setCursor(6, 1);
-      lcd.print("          ");
-      lcd.setCursor(6, 1);
-      lcd.print(speed);
-
+  lcd.print("          ");
+  lcd.setCursor(6, 1);
+  lcd.print(speed);
+  // Serial.println(myTrainHub.getDeviceTypeForPortNumber((byte)PoweredUpHubPort::B));
 }  // End of loop
