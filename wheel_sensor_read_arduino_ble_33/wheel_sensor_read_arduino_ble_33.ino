@@ -24,8 +24,8 @@ BLECharacteristic rpmChar(deviceServiceCharacteristicUuid3, BLERead | BLENotify,
 void setup() {
 
   Serial.begin(9600);  // initialize serial communication
-  while (!Serial)
-    ;
+  // while (!Serial)
+  //   ;
   rotation = rpm = pevtime = 0;  //Initialize all variable to zero
 
   Serial.println("Speed Sensor");  //Intro Message line 1
@@ -114,22 +114,23 @@ void loop() {
         Serial.println(right_intr);
         delay(10);
 
-        Serial.print("*Writing Distnace: ");
+        Serial.print("* Writing Distnace: ");
         Serial.print(distance);
         distanceChar.writeValue((const void *)&distance, sizeof(distance));
-        Serial.print("Speed: ");
+        Serial.print("   Speed: ");
         Serial.print(v);
         speedChar.writeValue((const void *)&v, sizeof(v));
-        Serial.print("Rpm: ");
+        Serial.print("   Rpm: ");
         Serial.println(rpm);
-        speedChar.writeValue((const void *)&rpm, sizeof(rpm));
+        rpmChar.writeValue((const void *)&rpm, sizeof(rpm));
         delay(500);
       }
       // when the central disconnects, turn off the LED:
-      digitalWrite(LED_BUILTIN, LOW);
+      
+    }
+    digitalWrite(LED_BUILTIN, LOW);
       Serial.print("Disconnected from central: ");
       Serial.println(central.address());
-    }
   }
 }
   void Right_ISR() {

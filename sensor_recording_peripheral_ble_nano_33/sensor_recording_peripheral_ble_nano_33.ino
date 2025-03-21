@@ -19,44 +19,47 @@
 
 #include <Arduino_LSM9DS1.h>
 
-#define MINIMUM_TILT 5    // Threshold for tilt detection in degrees
-#define WAIT_TIME 500     // How often to run the code (in milliseconds)
+#define MINIMUM_TILT 5  // Threshold for tilt detection in degrees
+#define WAIT_TIME 500   // How often to run the code (in milliseconds)
 
 
-// const char* deviceServiceUuid = "00001623-1212-efde-1623-785feabcd123";
-// const char* deviceServiceCharacteristicUuid = "00001624-1212-efde-1623-785feabcd123";
+const char *deviceServiceUuid = "00001623-1212-efde-1623-785feabcd123";
+const char *deviceServiceCharacteristicUuid = "00001624-1212-efde-1623-785feabcd123";
 
-const char* deviceServiceUuid = "19b10000-e8f2-537e-4f6c-d104768a1214";
-const char* deviceServiceCharacteristicUuid = "19b10001-e8f2-537e-4f6c-d104768a1214";
+// const char* deviceServiceUuid = "19b10000-e8f2-537e-4f6c-d104768a1214";
+// const char* deviceServiceCharacteristicUuid = "19b10001-e8f2-537e-4f6c-d104768a1214";
 float x, y, z;
 int angleX = 0;
 int angleY = 0;
-unsigned long previousMillis = 0;  
-int tilt=-1;
-int oldTiltValue=-1;
- // Bluetooth® Low Energy Battery Service
+unsigned long previousMillis = 0;
+int tilt = -1;
+int oldTiltValue = -1;
+// Bluetooth® Low Energy Battery Service
 BLEService wheelRotationService(deviceServiceUuid);
 
 // Bluetooth® Low Energy wheelRotation  Characteristic
 BLECharacteristic wheelRotationChar(deviceServiceCharacteristicUuid,  // standard 16-bit characteristic UUID
-    BLERead | BLENotify,4); // remote clients will be able to get notifications if this characteristic changes
-
-int oldwheelRotation = 0;  // last wheelRotation  reading from analog input
+                                    BLERead | BLENotify, 4);          // remote clients will be able to get notifications if this characteristic changes
+BLECharacteristic angleYChar("00001625-1212-efde-1623-785feabcd123", BLERead | BLENotify, 4);
+// int oldwheelRotation = 0;  // last wheelRotation  reading from analog input
 // long previousMillis = 0;  // last time the wheelRotation  was checked, in ms
-
+int32_t val32 = 0;
 void setup() {
-  Serial.begin(9600);    // initialize serial communication
-  while (!Serial);
+  Serial.begin(9600);  // initialize serial communication
+  while (!Serial)
+    ;
 
- if (!IMU.begin()) {
+  if (!IMU.begin()) {
     Serial.println("Failed to initialize IMU!");
-    while (1);
+    while (1)
+      ;
   }
   // begin initialization
   if (!BLE.begin()) {
     Serial.println("starting BLE failed!");
 
-    while (1);
+    while (1)
+      ;
   }
 
   /* Set a local name for the Bluetooth® Low Energy device
@@ -65,10 +68,12 @@ void setup() {
      The name can be changed but maybe be truncated based on space left in advertisement packet
   */
   BLE.setLocalName("RotationSensor");
-  BLE.setAdvertisedService(wheelRotationService); // add the service UUID
-  wheelRotationService.addCharacteristic(wheelRotationChar); // add the wheelRotation  characteristic
-  BLE.addService(wheelRotationService); // Add the wheelRotation service
-  // wheelRotationChar.writeValue(oldwheelRotation); // set initial value for this characteristic
+  BLE.setAdvertisedService(wheelRotationService);  // add the service UUID
+  wheelRotationService.addCharacteristic(wheelRotationChar);
+  wheelRotationService.addCharacteristic(angleYChar);
+  // add the wheelRotation  characteristic
+  BLE.addService(wheelRotationService);                               // Add the wheelRotation service
+  wheelRotationChar.writeValue((const void *)&val32, sizeof(val32));  // set initial value for this characteristic
 
   /* Start advertising Bluetooth® Low Energy.  It will start continuously transmitting Bluetooth® Low Energy
      advertising packets and will be visible to remote Bluetooth® Low Energy central devices
@@ -96,11 +101,16 @@ void loop() {
     // while the central is connected:
     while (central.connected()) {
       // if 200ms have passed, check the wheelRotation :
-      int val=updatewheelRotation();
+      int val = updatewheelRotation();
       // wheelRotationChar.writeValue((byte)val);
-      int32_t val32 = (int32_t)val;
-wheelRotationChar.writeValue((const void *)&val32, sizeof(val32));
-delay(500);
+      Serial.print("writing value ");
+      Serial.println(val);
+      val32 = (int32_t)val;
+      wheelRotationChar.writeValue((const void *)&val32, sizeof(val32));
+      delay(500); 
+      Serial.println(" writing val 2");
+      angleYChar.writeValue((const void *)&val32, sizeof(val32));
+      delay(500);
     }
     // when the central disconnects, turn off the LED:
     digitalWrite(LED_BUILTIN, LOW);
@@ -135,7 +145,7 @@ int updatewheelRotation() {
     // Calculate tilt angles in degrees
     angleX = atan2(x, sqrt(y * y + z * z)) * 180 / PI;
     angleY = atan2(y, sqrt(x * x + z * z)) * 180 / PI;
-return angleY;
+    return angleY;
     // Determine the tilting direction based on angleX and angleY
     // if (angleX > MINIMUM_TILT) {  // Tilting up
     //   Serial.print("Tilting up ");
