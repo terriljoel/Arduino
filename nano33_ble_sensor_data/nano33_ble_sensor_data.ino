@@ -124,6 +124,10 @@ void controlPeripheral(BLEDevice peripheral) {
       Serial.println("* Writing value to tilt type characteristic done!");
       Serial.println(" ");
     }
+    if(tiltCharacteristic.written()){
+      Serial.print("Value written :");
+      Serial.println((int)tiltCharacteristic.value());
+    }
   
   }
   Serial.println("- Peripheral device disconnected!");

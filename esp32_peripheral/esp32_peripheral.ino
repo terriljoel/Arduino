@@ -12,7 +12,8 @@
 */
 
 #include <ArduinoBLE.h>
-      
+BLEDevice central;
+bool initialized=false;    
 enum {
   tilt_NONE  = -1,
   tilt_UP    = 0,
@@ -30,6 +31,12 @@ BLEService tiltService(deviceServiceUuid);
 BLEIntCharacteristic tiltCharacteristic(deviceServiceCharacteristicUuid, BLERead | BLEWrite);
 
 
+
+// #include "Lpf2Hub.h"
+// Lpf2Hub myTrainHub;
+// byte port = (byte)PoweredUpHubPort::A;
+
+
 void setup() {
   Serial.begin(115200);
   while (!Serial);  
@@ -45,17 +52,36 @@ void setup() {
   BLE.addService(tiltService);
   tiltCharacteristic.writeValue(-1);
   BLE.advertise();
-
+// BLE.setConnectionInterval(100); 
   Serial.println("Nano 33 BLE (Peripheral Device)");
   Serial.println(" ");
 }
 
 void loop() {
-  BLEDevice central = BLE.central();
+  central = BLE.central();
   Serial.println("- Discovering central device...");
   delay(500);
 
-  if (central) {
+  // if (central && !initialized) {
+  //   Serial.println("* Connected to central device!");
+  //   Serial.print("* Device MAC address: ");
+  //   Serial.println(central.address());
+  //   Serial.println(" ");
+  //   initialized=true;
+  // }
+  //   if (central.connected()) {
+  //     if (tiltCharacteristic.written()) {
+  //        tilt = tiltCharacteristic.value();
+  //       //  writetilt(tilt);
+  //       Serial.println(tilt);
+  //      }
+    
+  //   delay(1000);
+  //   tiltCharacteristic.writeValue((int32_t)1000);
+  //   Serial.println("* Disconnected to central device!");
+  // }
+
+ if (central) {
     Serial.println("* Connected to central device!");
     Serial.print("* Device MAC address: ");
     Serial.println(central.address());
@@ -64,13 +90,49 @@ void loop() {
     while (central.connected()) {
       if (tiltCharacteristic.written()) {
          tilt = tiltCharacteristic.value();
-        //  writetilt(tilt);
-        Serial.println(tilt);
+         Serial.println(tilt);
        }
+       delay(1000);
+    tiltCharacteristic.writeValue((int32_t)1000);
     }
     
     Serial.println("* Disconnected to central device!");
   }
+
+//   if (!central && !myTrainHub.isConnected() && !myTrainHub.isConnecting()) {
+//     myTrainHub.init(); 
+//     Serial.println("Trying to connect"); 
+//   }
+
+//   // connect flow. Search for BLE services and try to/ connect if the uuid of the hub is found
+//   if (myTrainHub.isConnecting()) {
+//     myTrainHub.connectHub();
+//     if (myTrainHub.isConnected()) {
+//       Serial.println("Connected to HUB");
+//       Serial.print("Hub address: ");
+//       Serial.println(myTrainHub.getHubAddress().toString().c_str());
+//       Serial.print("Hub name: ");
+//       Serial.println(myTrainHub.getHubName().c_str());
+
+//       // myTrainHub.activateHubPropertyUpdate(HubPropertyReference::ADVERTISING_NAME, hubPropertyChangeCallback);
+//       // delay(50);
+//       // myTrainHub.activateHubPropertyUpdate(HubPropertyReference::BATTERY_VOLTAGE, hubPropertyChangeCallback);
+//       // delay(50);
+//       // myTrainHub.activateHubPropertyUpdate(HubPropertyReference::BUTTON, hubPropertyChangeCallback);
+//       // delay(50);
+//       // myTrainHub.activateHubPropertyUpdate(HubPropertyReference::RSSI, hubPropertyChangeCallback);
+//       // delay(50);
+//       // // myTrainHub.activatePortDevice((byte)MoveHubPort::TILT, portValueChangeCallback);
+//       // // delay(50);
+//       // myTrainHub.activatePortDevice((byte)PoweredUpHubPort::A, portValueChangeCallback);
+//       // delay(50);
+//       // // myTrainHub.activatePortDevice((byte)PoweredUpHubPort::VOLTAGE, portValueChangeCallback);
+//       // isInitialized = true;
+
+//     } else {
+//       Serial.println("Failed to connect to HUB");
+//     }
+// }
 }
 
 // void writetilt(int tilt) {
