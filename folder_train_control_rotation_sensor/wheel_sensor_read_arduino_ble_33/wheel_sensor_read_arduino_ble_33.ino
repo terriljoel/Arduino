@@ -102,19 +102,19 @@ void loop() {
         v = radius_of_wheel * rpm * 0.1047;  //0.033 is the radius of the wheel in meter
         distance = (2 * 3.141 * radius_of_wheel) * (right_intr / 4.0);
 
-        Serial.print("RPM- ");
-        Serial.print(rpm);
-        Serial.print("  Velocity- ");
-        Serial.print(v);
+        // Serial.print("RPM- ");
+        // Serial.print(rpm);
+        // Serial.print("  Velocity- ");
+        // Serial.print(v);
         Serial.print("  Rotation- ");
-        Serial.print(right_intr / 4);
-        Serial.print("  Distance- ");
-        Serial.print(distance);
+        Serial.print(right_intr / 4);  // Since there are 2 holes made on the wheel, For an entire rotation sensor values are changed 4 times, 2 for  the wholes and 2 for the area which is not a hole.
+        // Serial.print("  Distance- ");
+        // Serial.print(distance);
         Serial.print("  Grid Count- ");
         Serial.println(right_intr);
         delay(10);
 
-        Serial.print("* Writing Distnace: ");
+        Serial.print("* Writing Distance: ");
         Serial.print(distance);
         distanceChar.writeValue((const void *)&distance, sizeof(distance));
         Serial.print("   Speed: ");
@@ -126,24 +126,27 @@ void loop() {
         delay(500);
       }
       // when the central disconnects, turn off the LED:
-      
     }
     digitalWrite(LED_BUILTIN, LOW);
-      Serial.print("Disconnected from central: ");
-      Serial.println(central.address());
+    Serial.print("Disconnected from central: ");
+    Serial.println(central.address());
+    right_intr = 0;
+    flag = 1;
+    distance = 0;
+    Serial.println("count reset");
   }
 }
-  void Right_ISR() {
+void Right_ISR() {
 
-    right_intr++;
-    // delay(10);
-    rotation++;
-    dtime = millis();
+  right_intr++;
+  // delay(10);
+  rotation++;
+  dtime = millis();
 
-    if (rotation >= 4) {
-      timetaken = millis() - pevtime;  //timetaken in millisec
-      rpm = (1000 / timetaken) * 60;   //formulae to calculate rpm
-      pevtime = millis();
-      rotation = 0;
-    }
+  if (rotation >= 4) {
+    timetaken = millis() - pevtime;  //timetaken in millisec
+    rpm = (1000 / timetaken) * 60;   //formulae to calculate rpm
+    pevtime = millis();
+    rotation = 0;
   }
+}

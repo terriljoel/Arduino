@@ -151,14 +151,7 @@ void loop() {
         myHub1.shutDownHub();
         myHub2.shutDownHub();
         motorSpeed=0;
-        lcd.setCursor(10, 0);
-        lcd.print("   ");
-        lcd.setCursor(10, 0);
-        lcd.print("DIS");
-        lcd.setCursor(3, 0);
-        lcd.print("   ");
-        lcd.setCursor(3, 0);
-        lcd.print("DIS");
+        
       
     }
     if (motorSpeed == 0) {
@@ -181,6 +174,16 @@ void loop() {
         lcd.print("   ");
         lcd.setCursor(14, 1);
         lcd.print(rpm,1);
+  }else{
+    lcd.setCursor(10, 0);
+        lcd.print("   ");
+        lcd.setCursor(10, 0);
+        lcd.print("DIS");
+        lcd.setCursor(3, 0);
+        lcd.print("   ");
+        lcd.setCursor(3, 0);
+        lcd.print("DIS");
+        delay(1000);
   }
   // else{
   //   Serial.println("Hubs are disconnected");
