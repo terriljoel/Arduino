@@ -1,87 +1,82 @@
+#include <ArduinoBLE.h>  // Include the Arduino BLE library for Bluetooth Low Energy communication
 
-#include <ArduinoBLE.h>
-int right_intr = 0, angle = 0;
-float radius_of_wheel = 0.00825;  //Measure the radius of your wheel and enter it here in cm
-volatile byte rotation;           // variale for interrupt fun must be volatile
-float timetaken, rpm, dtime, v, distance;
-unsigned long pevtime;
-int flag = 1;
+// Define and initialize variables for wheel rotation and speed calculations
+int right_intr = 0;  // right_intr will count the wheel rotations
+float radius_of_wheel = 0.00825; // Radius of the wheel in centimeters, used to calculate velocity and distance
+volatile byte rotation;          // Variable to track the number of wheel rotations, marked as volatile because it is updated in an interrupt handler
+float timetaken, rpm, dtime, v, distance;  // Variables for time taken per rotation, RPM, velocity, and total distance
+unsigned long pevtime;          // Previous time of wheel rotation for RPM calculation
+int flag = 1;                    // Flag to control the display and data transmission logic
+const int no_of_holes = 2;      // The number of holes on the wheel for the sensor to detect rotations
+//The above value needs to be changed depending the on the number of holes in the wheel 
+int rotation_sensor_changes = 2 * no_of_holes; // Number of sensor changes per full rotation of the wheel
 
+// Bluetooth Low Energy service and characteristic UUIDs
 const char *deviceServiceUuid = "00001623-1212-efde-1623-785feabcd123";
 const char *deviceServiceCharacteristicUuid1 = "00001624-1212-efde-1623-785feabcd123";
 const char *deviceServiceCharacteristicUuid2 = "00001625-1212-efde-1623-785feabcd123";
 const char *deviceServiceCharacteristicUuid3 = "00001626-1212-efde-1623-785feabcd123";
 
-BLEService wheelRotationService(deviceServiceUuid);
+// Define the BLE service and characteristics
+BLEService wheelRotationService(deviceServiceUuid);  // BLE service for wheel rotation data
 
-// Bluetooth® Low Energy wheelRotation  Characteristic
-BLECharacteristic distanceChar(deviceServiceCharacteristicUuid1,  // standard 16-bit characteristic UUID
-                               BLERead | BLENotify, 4);           // remote clients will be able to get notifications if this characteristic changes
+// BLE Characteristics for Distance, Speed, and RPM with read and notify properties
+BLECharacteristic distanceChar(deviceServiceCharacteristicUuid1, BLERead | BLENotify, 4);
 BLECharacteristic speedChar(deviceServiceCharacteristicUuid2, BLERead | BLENotify, 4);
 BLECharacteristic rpmChar(deviceServiceCharacteristicUuid3, BLERead | BLENotify, 4);
 
-
 void setup() {
+  // Initialize serial communication for debugging
+  Serial.begin(9600); 
 
-  Serial.begin(9600);  // initialize serial communication
-  // while (!Serial)
-  //   ;
-  rotation = rpm = pevtime = 0;  //Initialize all variable to zero
+  rotation = rpm = pevtime = 0;  // Initialize rotation count, RPM, and previous time variables to zero
 
-  Serial.println("Speed Sensor");  //Intro Message line 1
-  delay(2000);
-  attachInterrupt(digitalPinToInterrupt(2), Right_ISR, CHANGE);  //Left_ISR is called when left wheel sensor is triggered
+  Serial.println("Speed Sensor");  // Print an introductory message to the serial monitor
+  delay(2000);  // Wait for 2 seconds before proceeding
 
+  // Attach interrupt to digital pin 2, which will trigger the Right_ISR function on a change (rise or fall) of the signal
+  attachInterrupt(digitalPinToInterrupt(2), Right_ISR, CHANGE);  // Right_ISR is called when the wheel sensor is triggered
+
+  // Initialize BLE functionality, if it fails, print an error and halt the program
   if (!BLE.begin()) {
     Serial.println("starting BLE failed!");
-
-    while (1)
-      ;
+    while (1);  // Stay in this loop if BLE fails to initialize
   }
 
+  // Set up BLE local device name and add the wheel rotation service
   BLE.setLocalName("RotationSensor");
-  BLE.setAdvertisedService(wheelRotationService);  // add the service UUID
-  wheelRotationService.addCharacteristic(distanceChar);
-  wheelRotationService.addCharacteristic(speedChar);
-  wheelRotationService.addCharacteristic(rpmChar);
-  BLE.addService(wheelRotationService);  // Add the wheelRotation service
-  // wheelRotationChar.writeValue((const void *)&val32, sizeof(val32));  // set initial value for this characteristic
+  BLE.setAdvertisedService(wheelRotationService);  // Add the wheel rotation service UUID
+  wheelRotationService.addCharacteristic(distanceChar);  // Add the distance characteristic
+  wheelRotationService.addCharacteristic(speedChar);  // Add the speed characteristic
+  wheelRotationService.addCharacteristic(rpmChar);    // Add the RPM characteristic
+  BLE.addService(wheelRotationService);  // Register the wheel rotation service with BLE
 
-  /* Start advertising Bluetooth® Low Energy.  It will start continuously transmitting Bluetooth® Low Energy
-     advertising packets and will be visible to remote Bluetooth® Low Energy central devices
-     until it receives a new connection */
-
-  // start advertising
+  // Start advertising the BLE service, making it discoverable by central devices
   BLE.advertise();
 }
 
 void loop() {
-
-
+  // Wait for a connection from a BLE central device (e.g., smartphone, tablet, etc.)
   BLEDevice central = BLE.central();
 
-
-  if (central) {
-
+  if (central) {  // If a central device is connected
     Serial.print("Connected to central: ");
-    // print the central's BT address:
-    Serial.println(central.address());
-    // turn on the LED to indicate the connection:
-    digitalWrite(LED_BUILTIN, HIGH);
+    Serial.println(central.address());  // Print the central device's address to the serial monitor
 
-    // check the wheelRotation  every 200ms
-    // while the central is connected:
+    digitalWrite(LED_BUILTIN, HIGH);  // Turn on the built-in LED to indicate that the device is connected
+
+    // While the central device is still connected
     while (central.connected()) {
+      // Check if there is any serial input (from the user via Serial Monitor)
       if (Serial.available() > 0) {
-        char input = Serial.read();
-        if (input == 'r') {
+        char input = Serial.read();  // Read the input character from the serial monitor
+        if (input == 'r') {  // Reset the rotation count and distance
           right_intr = 0;
           flag = 1;
           distance = 0;
           Serial.println("count reset");
-        } else if (input == 's') {
-          // float wheel_circumference = 2 * 3.14159 * radius_of_wheel;  // Wheel circumference in meters
-          // float distance = wheel_circumference * (wheel_count / 40.0);
+        }
+        else if (input == 's') {  // Display the current RPM, velocity, and distance. Stop the sensor reading 
           Serial.print("RPM- ");
           Serial.print(rpm);
           Serial.print("  Velocity- ");
@@ -93,27 +88,25 @@ void loop() {
           flag = 0;
         }
       }
-      if (flag) {
-        if (millis() - dtime > 500)  //no inetrrupt found for 500ms
-        {
-          rpm = v = 0;  // make rpm and velocity as zero
-          dtime = millis();
-        }
-        v = radius_of_wheel * rpm * 0.1047;  //0.033 is the radius of the wheel in meter
-        distance = (2 * 3.141 * radius_of_wheel) * (right_intr / 4.0);
 
-        // Serial.print("RPM- ");
-        // Serial.print(rpm);
-        // Serial.print("  Velocity- ");
-        // Serial.print(v);
+      // If the flag is set to 1, update the display and send data
+      if (flag) {
+        // If no interrupts have been detected for 500ms, reset RPM and velocity
+        if (millis() - dtime > 500) {
+          rpm = v = 0;  // Reset RPM and velocity to zero
+          dtime = millis();  // Update the last time a change was detected
+        }
+        // Calculate velocity and distance based on wheel rotation
+        v = radius_of_wheel * rpm * 0.1047;  // Velocity in cm/s (conversion factor for RPM to velocity)
+        distance = (2 * 3.141 * radius_of_wheel) * (right_intr / rotation_sensor_changes);  // Total distance traveled
+
+        // Print current rotation and grid count for debugging
         Serial.print("  Rotation- ");
-        Serial.print(right_intr / 4);  // Since there are 2 holes made on the wheel, For an entire rotation sensor values are changed 4 times, 2 for  the wholes and 2 for the area which is not a hole.
-        // Serial.print("  Distance- ");
-        // Serial.print(distance);
+        Serial.print(right_intr / rotation_sensor_changes);  // Rotation count is divided by 4 (since 2 holes are detected per rotation)
         Serial.print("  Grid Count- ");
         Serial.println(right_intr);
-        delay(10);
 
+        // Write the calculated distance, speed, and RPM to the BLE characteristics
         Serial.print("* Writing Distance: ");
         Serial.print(distance);
         distanceChar.writeValue((const void *)&distance, sizeof(distance));
@@ -123,30 +116,32 @@ void loop() {
         Serial.print("   Rpm: ");
         Serial.println(rpm);
         rpmChar.writeValue((const void *)&rpm, sizeof(rpm));
-        delay(500);
+        delay(500);  // Wait for 500ms before sending the next data
       }
-      // when the central disconnects, turn off the LED:
     }
+
+    // When the central device disconnects, turn off the LED and reset variables
     digitalWrite(LED_BUILTIN, LOW);
     Serial.print("Disconnected from central: ");
     Serial.println(central.address());
-    right_intr = 0;
-    flag = 1;
-    distance = 0;
+    right_intr = 0;  // Reset rotation count
+    flag = 1;        // Reset flag
+    distance = 0;    // Reset distance
     Serial.println("count reset");
   }
 }
+
+// Interrupt Service Routine (ISR) for detecting wheel rotation
 void Right_ISR() {
+  right_intr++;  // Increment the rotation count on each interrupt (wheel rotation)
+  rotation++;    // Increment the rotation variable for RPM calculation
+  dtime = millis();  // Update the time of the last interrupt
 
-  right_intr++;
-  // delay(10);
-  rotation++;
-  dtime = millis();
-
-  if (rotation >= 4) {
-    timetaken = millis() - pevtime;  //timetaken in millisec
-    rpm = (1000 / timetaken) * 60;   //formulae to calculate rpm
-    pevtime = millis();
-    rotation = 0;
+  // If the number of rotations reaches the sensor threshold, calculate RPM
+  if (rotation >= rotation_sensor_changes) {
+    timetaken = millis() - pevtime;  // Calculate the time taken for one full rotation in milliseconds
+    rpm = (1000 / timetaken) * 60;   // Calculate RPM based on the time taken for one full rotation
+    pevtime = millis();  // Update the previous time for the next calculation
+    rotation = 0;  // Reset the rotation counter
   }
 }
