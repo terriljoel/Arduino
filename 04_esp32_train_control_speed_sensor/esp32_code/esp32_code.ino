@@ -1,256 +1,263 @@
-#include "Lpf2Hub.h"        // Include Lego Ino Library for interacting with LEGO PoweredUp Hub
 #include <NimBLEDevice.h>
 
-// Create a pointer to a NimBLEClient object
-NimBLEClient* pClient = nullptr;
+// Arduino Nano ESP32 built-in LEDs
+#define LED_RED 14      // RGB Red pin
+#define LED_GREEN 16    // RGB Green pin  
+#define LED_BLUE 15     // RGB Blue pin
 
-// Create instances for two hubs
-Lpf2Hub myHub1;                         // Hub instance for Arduino BLE Nano 33
-Lpf2Hub myHub2;                         // Hub instance for Train Hub (second hub)
-byte port = (byte)PoweredUpHubPort::A;  // Define the motor port for communication with the motor
+// BLE Server for laptop communication
+NimBLEServer* pServer = nullptr;
+NimBLECharacteristic* pCharacteristic = nullptr;
+bool laptopConnected = false;
 
+// Service and Characteristic UUIDs for laptop communication
+#define LAPTOP_SERVICE_UUID        "12345678-1234-1234-1234-123456789abc"
+#define LAPTOP_CHARACTERISTIC_UUID "87654321-4321-4321-4321-cba987654321"
 
-bool isInitialized = false;  // Flag to track initialization state of hubs
+// Status variables
+int testValue = 0;
+int currentLedColor = 0; // 0=off, 1=red, 2=green, 3=blue
 
-// Volatile variables for speed, distance, and RPM (updated by notifications)
-volatile float speed = 0, distance = 0, rpm = 0;
-char hubName[] = "IfEV";  // Hub name for identification (could be used for display or debugging)
-int motorSpeed = 0;       // Motor speed variable (ranges from 0 to maximum speed)
-
-/**
- * @brief Subscribe to a custom characteristic of a connected BLE device.
- *
- * This function subscribes to a specified characteristic on a BLE device and sets up a callback to
- * handle notifications from that characteristic. It checks if the device is connected and if the 
- * characteristic supports notifications before subscribing.
- *
- * @param pClient Pointer to the NimBLEClient object representing the connected BLE device.
- * @param serviceUUID UUID of the service containing the characteristic.
- * @param charUUID UUID of the characteristic to subscribe to.
- * @param callback Function to handle the data received from notifications.
- */
-void subscribeToCharacteristic(NimBLEClient* pClient, const char* serviceUUID, const char* charUUID, std::function<void(uint8_t*, size_t)> callback) {
-  // Check if the client is connected
-  if (!pClient || !pClient->isConnected()) {
-    Serial.println("BLE client not connected.");
-    return; // Exit if the client is not connected
-  }
-
-  // Get the service from the connected BLE device using the service UUID
-  NimBLERemoteService* pService = pClient->getService(serviceUUID);
-  if (!pService) {
-    Serial.print("Service UUID not found: ");
-    Serial.println(serviceUUID);
-    return; // Exit if the service is not found
-  }
-
-  // Get the characteristic from the service using the characteristic UUID
-  NimBLERemoteCharacteristic* pChar = pService->getCharacteristic(charUUID);
-  if (!pChar) {
-    Serial.print("Characteristic UUID not found: ");
-    Serial.println(charUUID);
-    return; // Exit if the characteristic is not found
-  }
-
-  // Check if the characteristic supports notifications
-  if (!pChar->canNotify()) {
-    Serial.println("Characteristic does not support notifications.");
-    return; // Exit if notifications are not supported
-  }
-
-  // Subscribe to the characteristic and set the callback function for notifications
-  bool result = pChar->subscribe(true, [callback](NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
-    callback(pData, length); // Call the callback function with the received data
-  });
-
-  // Log whether the subscription was successful or not
-  if (result) {
-    Serial.print("Subscribed to ");
-    Serial.println(charUUID);
-  } else {
-    Serial.print("Failed to subscribe to ");
-    Serial.println(charUUID);
-  }
+// Function to set RGB LED color
+void setRGBLed(int color) {
+    // Turn off all colors first (HIGH = OFF for RGB LED)
+    digitalWrite(LED_RED, HIGH);
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_BLUE, HIGH);
+    
+    // Set the desired color (LOW = ON for RGB LED)
+    switch(color) {
+        case 0: // OFF - all already high
+            break;
+        case 1: // RED
+            digitalWrite(LED_RED, LOW);
+            break;
+        case 2: // GREEN
+            digitalWrite(LED_GREEN, LOW);
+            break;
+        case 3: // BLUE
+            digitalWrite(LED_BLUE, LOW);
+            break;
+        case 4: // YELLOW (Red + Green)
+            digitalWrite(LED_RED, LOW);
+            digitalWrite(LED_GREEN, LOW);
+            break;
+        case 5: // PURPLE (Red + Blue)
+            digitalWrite(LED_RED, LOW);
+            digitalWrite(LED_BLUE, LOW);
+            break;
+        case 6: // CYAN (Green + Blue)
+            digitalWrite(LED_GREEN, LOW);
+            digitalWrite(LED_BLUE, LOW);
+            break;
+        case 7: // WHITE (All colors)
+            digitalWrite(LED_RED, LOW);
+            digitalWrite(LED_GREEN, LOW);
+            digitalWrite(LED_BLUE, LOW);
+            break;
+    }
+    currentLedColor = color;
 }
 
-/**
- * @brief Disconnect from a connected BLE device.
- *
- * This function disconnects from the currently connected BLE device and provides feedback 
- * on the disconnection status. It checks if the client is connected before attempting to disconnect.
- *
- * @param pClient Pointer to the NimBLEClient object representing the connected BLE device.
- */
-void disconnectFromHub(NimBLEClient* pClient) {
-  // Check if the client is connected
-  if (!pClient || !pClient->isConnected()) {
-    Serial.println("Not connected to any BLE device.");
-    return; // Exit if the client is not connected
-  }
+// BLE Server Callbacks for laptop connection
+class LaptopServerCallbacks: public NimBLEServerCallbacks {
+    void onConnect(NimBLEServer* pServer) {
+        laptopConnected = true;
+        Serial.println(">>> LAPTOP CONNECTED VIA BLE <<<");
+        setRGBLed(2); // Green = connected
+        
+        // Send initial test response
+        String welcome = "CONNECTED:ESP32_BLE_TEST_READY";
+        pCharacteristic->setValue(welcome.c_str());
+        pCharacteristic->notify();
+    }
 
-  // Disconnect from the BLE device
-  Serial.println("Disconnecting from BLE device...");
-  pClient->disconnect();
-  delay(500);  // Allow time for disconnection to complete
+    void onDisconnect(NimBLEServer* pServer) {
+        laptopConnected = false;
+        Serial.println(">>> LAPTOP DISCONNECTED <<<");
+        setRGBLed(1); // Red = disconnected
+        
+        // Restart advertising
+        pServer->startAdvertising();
+        Serial.println("BLE advertising restarted");
+    }
+};
 
-  // Log the disconnection status
-  Serial.println("Successfully disconnected from hub.");
+// BLE Characteristic Callbacks for handling laptop commands
+class LaptopCharacteristicCallbacks: public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic *pCharacteristic) {
+        String command = pCharacteristic->getValue().c_str();
+        Serial.println(">>> RECEIVED COMMAND: " + command + " <<<");
+        processTestCommand(command);
+    }
+};
+
+// Process test commands from laptop
+void processTestCommand(String command) {
+    Serial.println("Processing: " + command);
+    
+    if (command == "TEST_PING") {
+        String response = "TEST_PONG";
+        pCharacteristic->setValue(response.c_str());
+        pCharacteristic->notify();
+        Serial.println("Sent: " + response);
+    }
+    else if (command == "GET_STATUS") {
+        String status = "STATUS:";
+        status += "CONNECTED:" + String(laptopConnected ? "YES" : "NO") + ",";
+        status += "TEST_VALUE:" + String(testValue) + ",";
+        status += "LED_COLOR:" + String(currentLedColor);
+        
+        pCharacteristic->setValue(status.c_str());
+        pCharacteristic->notify();
+        Serial.println("Status sent: " + status);
+    }
+    else if (command.startsWith("SET_VALUE_")) {
+        int newValue = command.substring(10).toInt();
+        testValue = newValue;
+        
+        String response = "VALUE_SET:" + String(testValue);
+        pCharacteristic->setValue(response.c_str());
+        pCharacteristic->notify();
+        Serial.println("Test value set to: " + String(testValue));
+    }
+    else if (command.startsWith("LED_")) {
+        String action = command.substring(4);
+        
+        if (action == "OFF") {
+            setRGBLed(0);
+        } else if (action == "RED") {
+            setRGBLed(1);
+        } else if (action == "GREEN") {
+            setRGBLed(2);
+        } else if (action == "BLUE") {
+            setRGBLed(3);
+        } else if (action == "YELLOW") {
+            setRGBLed(4);
+        } else if (action == "PURPLE") {
+            setRGBLed(5);
+        } else if (action == "CYAN") {
+            setRGBLed(6);
+        } else if (action == "WHITE") {
+            setRGBLed(7);
+        } else if (action == "BLINK") {
+            // Blink sequence
+            for (int i = 0; i < 3; i++) {
+                setRGBLed(1); delay(200);
+                setRGBLed(2); delay(200);
+                setRGBLed(3); delay(200);
+                setRGBLed(0); delay(200);
+            }
+            setRGBLed(2); // Back to green (connected)
+        }
+        
+        String response = "LED_" + action + "_DONE";
+        pCharacteristic->setValue(response.c_str());
+        pCharacteristic->notify();
+        Serial.println("LED command executed: " + action);
+    }
+    else {
+        String response = "UNKNOWN_COMMAND:" + command;
+        pCharacteristic->setValue(response.c_str());
+        pCharacteristic->notify();
+        Serial.println("Unknown command: " + command);
+    }
 }
 
+// Initialize BLE server for laptop communication
+void initializeBLE() {
+    Serial.println(">>> INITIALIZING BLE SERVER <<<");
+    
+    // Initialize NimBLE with shorter name to avoid truncation
+    NimBLEDevice::init("ESP32-LEGO");
+    Serial.println("Device name set to: ESP32-LEGO");
+    
+    // Create BLE Server
+    pServer = NimBLEDevice::createServer();
+    pServer->setCallbacks(new LaptopServerCallbacks());
+    Serial.println("BLE server created");
 
-// Notification handler for distance data received from the hub
-void handleNotification(uint8_t* data, size_t length) {
-  if (length == 4) {  // Expecting 4 bytes of data
-    float value;
-    memcpy(&value, data, sizeof(value));  // Interpret 4 bytes as a float
-    Serial.print("Received distance: ");
-    Serial.println(value);
-    distance = value;  // Store the received distance value
-  }
+    // Create BLE Service
+    NimBLEService *pService = pServer->createService(LAPTOP_SERVICE_UUID);
+    Serial.println("Service created with UUID: " + String(LAPTOP_SERVICE_UUID));
+
+    // Create BLE Characteristic
+    pCharacteristic = pService->createCharacteristic(
+                        LAPTOP_CHARACTERISTIC_UUID,
+                        NIMBLE_PROPERTY::READ |
+                        NIMBLE_PROPERTY::WRITE |
+                        NIMBLE_PROPERTY::NOTIFY
+                      );
+    Serial.println("Characteristic created with UUID: " + String(LAPTOP_CHARACTERISTIC_UUID));
+
+    pCharacteristic->setCallbacks(new LaptopCharacteristicCallbacks());
+
+    // Start the service
+    pService->start();
+    Serial.println("Service started");
+
+    // Start advertising
+    NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(LAPTOP_SERVICE_UUID);
+    pAdvertising->setScanResponse(false);
+    pAdvertising->setMinPreferred(0x0);
+    pServer->getAdvertising()->start();
+    
+    Serial.println(">>> BLE ADVERTISING STARTED <<<");
+    Serial.println("Ready for laptop connection!");
 }
 
-// Notification handler for speed data received from the hub
-void handleNotification2(uint8_t* data, size_t length) {
-  if (length == 4) {  // Expecting 4 bytes of data
-    float value;
-    memcpy(&value, data, sizeof(value));  // Interpret 4 bytes as a float
-    Serial.print("Received speed: ");
-    Serial.println(value);
-    speed = value;  // Store the received speed value
-  }
-}
-
-// Notification handler for RPM data received from the hub
-void handleNotification3(uint8_t* data, size_t length) {
-  if (length == 4) {  // Expecting 4 bytes of data
-    float value;
-    memcpy(&value, data, sizeof(value));  // Interpret 4 bytes as a float
-    Serial.print("Received RPM: ");
-    Serial.println(value);
-    rpm = value;  // Store the received RPM value
-  }
-}
-
-// Setup function to initialize serial communication, and hub connections
 void setup() {
-  Serial.begin(115200);  // Start serial communication at 115200 baud rate
-                         // while (!Serial);  // Unless and until the board is not connected to the serial the program will not proceed. This code is commented out as it is not required.
-  myHub1.init();         // Initialize the first hub (BLE Nano 33)
-  Serial.println("- Setting Up .....");
-
+    Serial.begin(115200);
+    delay(1000); // Give serial time to initialize
+    
+    Serial.println("\n\n========================================");
+    Serial.println(">>> ESP32 BLE TEST - NO LEGO HUB <<<");
+    Serial.println("Hardware: Arduino Nano ESP32");
+    Serial.println("========================================");
+    
+    // Initialize RGB LED pins
+    pinMode(LED_RED, OUTPUT);
+    pinMode(LED_GREEN, OUTPUT);
+    pinMode(LED_BLUE, OUTPUT);
+    
+    // Start with red LED (not connected)
+    setRGBLed(1);
+    Serial.println("RGB LED initialized - Red (waiting for connection)");
+    
+    // Initialize BLE server
+    initializeBLE();
+    
+    Serial.println(">>> SETUP COMPLETE <<<");
+    Serial.println("Waiting for laptop to connect...");
+    Serial.println("Look for device: ESP32-LEGO");
+    Serial.println("========================================\n");
 }
 
-// Main loop where all the logic is handled continuously
 void loop() {
-  // Attempt to connect to Hub 1 (Arduino nano ble 33) if not connected and initialization is not done
-  if (myHub1.isConnecting() && !isInitialized) {
-    myHub1.connectHub();         // Try to connect Hub 1 (Arduino nano ble 33)
-    if (myHub1.isConnected()) {  // If connection is successful
-      Serial.println("Connected to Hub 1 (Arduino nano ble 33)");
-
-      Serial.print("Hub address: ");
-      Serial.print(myHub1.getHubAddress().toString().c_str());
-      Serial.print("  Hub name: ");
-      Serial.println(myHub1.getHubName().c_str());
-      Serial.println("Connected to HUB 1");
-
-      pClient = NimBLEDevice::getClientByPeerAddress(myHub1.getHubAddress());
-      if (pClient) {
-        subscribeToCharacteristic(pClient, "00001623-1212-efde-1623-785feabcd123", "00001624-1212-efde-1623-785feabcd123", handleNotification);
-        subscribeToCharacteristic(pClient, "00001623-1212-efde-1623-785feabcd123", "00001625-1212-efde-1623-785feabcd123", handleNotification2);
-        subscribeToCharacteristic(pClient, "00001623-1212-efde-1623-785feabcd123", "00001626-1212-efde-1623-785feabcd123", handleNotification3);
-      } else {
-        Serial.println("Failed to get BLE client.");
-      }
-
-      isInitialized = true;  // Mark initialization as complete
-      delay(50);
-      myHub2.init();  // Initialize Hub 2 (Train Hub)
-      delay(50);
-    } else {
-      Serial.println("Failed to connect to Hub 1 (Arduino nano ble 33)");
+    // Simple status indicator
+    static unsigned long lastStatus = 0;
+    if (millis() - lastStatus > 5000) {
+        Serial.println("--- Status ---");
+        Serial.println("Laptop: " + String(laptopConnected ? "CONNECTED" : "WAITING"));
+        Serial.println("Test Value: " + String(testValue));
+        Serial.println("LED Color: " + String(currentLedColor));
+        Serial.println("Free Heap: " + String(ESP.getFreeHeap()));
+        Serial.println("--------------");
+        lastStatus = millis();
     }
-  }
-
-  // Similar connection logic for Hub 2 (Train Hub)
-  if (myHub2.isConnecting()) {
-    myHub2.connectHub();
-    if (myHub2.isConnected()) {
-      Serial.println("Connected to HUB 2");
-   
-      Serial.println("");
-      Serial.print("Hub address: ");
-      Serial.print(myHub2.getHubAddress().toString().c_str());
-      Serial.print("  Hub name: ");
-      Serial.println(myHub2.getHubName().c_str());
-      delay(50);
-    } else {
-      Serial.println("Failed to connect to HUB 2");
+    
+    // Blink LED if not connected
+    if (!laptopConnected) {
+        static unsigned long lastBlink = 0;
+        static bool blinkState = false;
+        
+        if (millis() - lastBlink > 1000) {
+            blinkState = !blinkState;
+            setRGBLed(blinkState ? 1 : 0); // Blink red
+            lastBlink = millis();
+        }
     }
-  }
-
-  // Handle button presses for controlling the train's motor
-  buttonStateDC = digitalRead(buttonPinDC);  // Read the state of the Disconnect button
-  if (buttonStateDC == HIGH && !myHub1.isConnected() && !myHub2.isConnected()) {
-    isInitialized = false;  // Reset initialization if disconnect button is pressed
-    myHub1.init();          // Reinitialize Hub 1 (Arduino nano ble 33)
-  }
-
-  // If both hubs are connected, read button states and control motor speed
-  if (myHub1.isConnected() && myHub2.isConnected()) {
-    buttonStateS = digitalRead(buttonPinS);  // Read the Stop button state
-    buttonStateU = digitalRead(buttonPinU);  // Read the Increase Speed button state
-    buttonStateD = digitalRead(buttonPinD);  // Read the Decrease Speed button state
-
-    // Control logic for motor based on button presses
-    if (buttonStateS == HIGH) {
-      Serial.println("Input is STOP");
-      Serial.println("Train halting");
-      motorSpeed = 0;    // Stop the motor
-      buttonStateS = 0;  // Reset button state
-    } else if (buttonStateU == HIGH) {
-      Serial.println("Input is Increase Speed by 10");
-      motorSpeed += 10;  // Increase speed by 10
-      Serial.print("Current Speed ");
-      Serial.println(motorSpeed);
-      buttonStateU = 0;  // Reset button state
-      delay(300);        // Small delay to prevent multiple triggers
-    } else if (buttonStateD == HIGH) {
-      Serial.println("Input is Decrease Speed by 10");
-      motorSpeed -= 10;  // Decrease speed by 10
-      Serial.print("Current Speed ");
-      Serial.println(motorSpeed);
-      buttonStateD = 0;  // Reset button state
-      delay(300);
-    } else if (buttonStateDC == HIGH) {
-      Serial.println("**** Hubs are disconnected");
-      disconnectFromHub(pClient);// Disconnect Hub 1 (Arduino nano ble 33)
-      delay(100);            // Short delay
-      myHub2.shutDownHub();  // Shut down Hub 2
-      motorSpeed = 0;        // Stop motor when hubs are disconnected
-    }
-
-    // Set motor speed or stop motor based on the motorSpeed variable
-    if (motorSpeed == 0) {
-      delay(50);
-      myHub2.stopBasicMotor(port);  // Stop the motor
-    } else {
-      delay(50);
-      myHub2.setBasicMotorSpeed(port, motorSpeed);  // Set the motor speed
-    }
-
-  }
-
-  // Display disconnected state   if any hub is not connected
-  if (!myHub1.isConnected()) {
-    delay(1000);  // Wait for 1 second before checking again
-  }
-
-  if (!myHub2.isConnected()) {
- 
-    delay(1000);  // Wait for 1 second before checking again
-  }
-  if (!myHub2.isConnected() && !myHub1.isConnected()) {
-    Serial.println("* Hubs are disconnected");
-  }
+    
+    delay(100);
 }
