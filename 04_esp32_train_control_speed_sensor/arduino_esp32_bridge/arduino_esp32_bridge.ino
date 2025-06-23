@@ -6,6 +6,23 @@
 #define LED_GREEN 16    // RGB Green pin  
 #define LED_BLUE 15     // RGB Blue pin
 
+// Rotation Sensor Configuration
+#define ROTATION_SENSOR_PIN 2  // Interrupt pin for rotation sensor
+const float WHEEL_RADIUS = 0.00825; // Radius of wheel in meters (8.25mm)
+const int NO_OF_HOLES = 2;          // Number of holes in the wheel
+const int SENSOR_CHANGES_PER_ROTATION = 2 * NO_OF_HOLES; // 4 changes per rotation
+
+// Rotation Sensor Variables
+volatile int rotationInterruptCount = 0;  // Raw interrupt count
+volatile int rotationCount = 0;           // Count for RPM calculation
+volatile unsigned long lastInterruptTime = 0;
+float sensorDistance = 0.0;              // Distance from sensor (cm)
+float sensorSpeed = 0.0;                 // Speed from sensor (cm/s)
+float sensorRPM = 0.0;                   // RPM from sensor
+unsigned long previousRPMTime = 0;       // Previous time for RPM calculation
+unsigned long lastSensorUpdate = 0;     // Last time sensor data was updated
+bool sensorEnabled = true;               // Enable/disable sensor
+
 // BLE Server for laptop communication
 NimBLEServer* pServer = nullptr;
 NimBLECharacteristic* pCharacteristic = nullptr;
@@ -34,19 +51,67 @@ unsigned long moveDuration = 0;
 int targetSpeed = 0;
 String currentCommand = "";
 
+// Distance-based movement control
+bool isDistanceMovement = false;
+float targetDistance = 0.0;
+float startDistance = 0.0;
+float remainingDistance = 0.0;
+bool useClosedLoopDistance = true; // Use sensor feedback for distance control
+
 // Movement statistics
 float totalDistance = 0.0;
 unsigned long totalMoveTime = 0;
 int maxSpeedUsed = 0;
 int totalMovements = 0;
 
-// Emergency stop flag (start as false)
+// Emergency stop flag
 bool emergencyStopActive = false;
 
 // Manual LED control
 bool manualLedActive = false;
 unsigned long manualLedStartTime = 0;
 const unsigned long MANUAL_LED_TIMEOUT = 10000; // 10 seconds timeout
+
+// Rotation Sensor Interrupt Service Routine
+void IRAM_ATTR rotationSensorISR() {
+    unsigned long currentTime = millis();
+    
+    // Debounce: ignore interrupts too close together (< 5ms)
+    if (currentTime - lastInterruptTime > 5) {
+        rotationInterruptCount++;
+        rotationCount++;
+        lastInterruptTime = currentTime;
+        
+        // Calculate RPM when we have a full rotation
+        if (rotationCount >= SENSOR_CHANGES_PER_ROTATION) {
+            unsigned long timeTaken = currentTime - previousRPMTime;
+            if (timeTaken > 0) {
+                sensorRPM = (60000.0 / timeTaken); // RPM calculation
+                previousRPMTime = currentTime;
+            }
+            rotationCount = 0;
+        }
+    }
+}
+
+// Update sensor calculations
+void updateSensorData() {
+    unsigned long currentTime = millis();
+    
+    // Reset RPM and speed if no movement detected for 1000ms
+    if (currentTime - lastInterruptTime > 1000) {
+        sensorRPM = 0.0;
+        sensorSpeed = 0.0;
+    } else {
+        // Calculate speed from RPM
+        sensorSpeed = WHEEL_RADIUS * sensorRPM * 0.1047; // cm/s
+    }
+    
+    // Calculate total distance
+    sensorDistance = (2 * PI * WHEEL_RADIUS * 100) * (rotationInterruptCount / (float)SENSOR_CHANGES_PER_ROTATION); // in cm
+    
+    lastSensorUpdate = currentTime;
+}
 
 // Hub property callback function
 void hubPropertyChangeCallback(void *hub, HubPropertyReference hubProperty, uint8_t *pData) {
@@ -166,8 +231,23 @@ class LaptopCharacteristicCallbacks: public NimBLECharacteristicCallbacks {
     }
 };
 
+void sendSensorDataToLaptop() {
+    if (!laptopConnected) return;
+    
+    String sensorData = "SENSOR_LIVE:";
+    sensorData += "DISTANCE:" + String(sensorDistance, 2) + ",";
+    sensorData += "SPEED:" + String(sensorSpeed, 2) + ",";
+    sensorData += "RPM:" + String(sensorRPM, 1);
+    
+    const char* sensorCStr = sensorData.c_str();
+    pCharacteristic->setValue((uint8_t*)sensorCStr, sensorData.length());
+    pCharacteristic->notify();
+}
+
 void sendStatusToLaptop() {
     if (!laptopConnected) return;
+    
+    updateSensorData(); // Update sensor data before sending
     
     String status = "STATUS:";
     status += "HUB:" + String(legoHub.isConnected() ? "C" : "D") + ",";
@@ -176,15 +256,24 @@ void sendStatusToLaptop() {
     status += "HUB_NAME:" + hubName + ",";
     status += "MOVING:" + String(isMoving ? "Y" : "N") + ",";
     status += "TOTAL_DISTANCE:" + String(totalDistance, 2) + ",";
+    status += "SENSOR_DISTANCE:" + String(sensorDistance, 2) + ",";
+    status += "SENSOR_SPEED:" + String(sensorSpeed, 2) + ",";
+    status += "SENSOR_RPM:" + String(sensorRPM, 1) + ",";
     status += "TOTAL_TIME:" + String(totalMoveTime / 1000) + ",";
     status += "MAX_SPEED:" + String(maxSpeedUsed) + ",";
     status += "TOTAL_MOVEMENTS:" + String(totalMovements) + ",";
-    status += "EMERGENCY:" + String(emergencyStopActive ? "Y" : "N");
+    status += "EMERGENCY:" + String(emergencyStopActive ? "Y" : "N") + ",";
+    status += "SENSOR_ENABLED:" + String(sensorEnabled ? "Y" : "N") + ",";
+    status += "DISTANCE_MODE:" + String(useClosedLoopDistance ? "SENSOR" : "TIME");
     
-    // Debug: Print what we're sending
+    // Add distance movement progress if active
+    if (isDistanceMovement) {
+        float traveledDistance = abs(sensorDistance - startDistance);
+        status += ",DISTANCE_PROGRESS:" + String(traveledDistance, 2) + "/" + String(targetDistance, 2);
+    }
+    
     Serial.println("Sending status to laptop: " + status);
     
-    // Ensure we're sending as text
     const char* statusCStr = status.c_str();
     pCharacteristic->setValue((uint8_t*)statusCStr, status.length());
     pCharacteristic->notify();
@@ -193,9 +282,47 @@ void sendStatusToLaptop() {
 void stopCurrentMovement() {
     if (isMoving) {
         totalMoveTime += (millis() - moveStartTime);
+        
+        // Calculate actual distance traveled for both movement types
+        float actualDistance = abs(sensorDistance - startDistance);
+        unsigned long actualTime = millis() - moveStartTime;
+        
+        if (isDistanceMovement) {
+            Serial.println("Distance movement completed: Target=" + String(targetDistance, 2) + 
+                          "cm, Actual=" + String(actualDistance, 2) + "cm, Time=" + String(actualTime) + "ms");
+            
+            if (laptopConnected) {
+                String response = "DISTANCE_COMPLETED:TARGET:" + String(targetDistance, 2) + 
+                                 ",ACTUAL:" + String(actualDistance, 2) + 
+                                 ",ERROR:" + String(abs(targetDistance - actualDistance), 2) + 
+                                 ",TIME:" + String(actualTime);
+                const char* responseCStr = response.c_str();
+                pCharacteristic->setValue((uint8_t*)responseCStr, response.length());
+                pCharacteristic->notify();
+            }
+        } else if (moveDuration > 0) {
+            // This was a timed movement
+            Serial.println("Timed movement completed: Duration=" + String(moveDuration) + 
+                          "ms, Actual=" + String(actualTime) + "ms, Distance=" + String(actualDistance, 2) + "cm");
+            
+            if (laptopConnected) {
+                String response = "TIMED_COMPLETED:PLANNED:" + String(moveDuration) + 
+                                 ",ACTUAL:" + String(actualTime) + 
+                                 ",DISTANCE:" + String(actualDistance, 2) + 
+                                 ",SPEED:" + String(motorSpeed);
+                const char* responseCStr = response.c_str();
+                pCharacteristic->setValue((uint8_t*)responseCStr, response.length());
+                pCharacteristic->notify();
+            }
+        }
+        
         isMoving = false;
+        isDistanceMovement = false;
         moveStartTime = 0;
         moveDuration = 0;
+        targetDistance = 0.0;
+        startDistance = 0.0;
+        remainingDistance = 0.0;
         currentCommand = "";
         
         if (legoHub.isConnected()) {
@@ -205,12 +332,67 @@ void stopCurrentMovement() {
         
         Serial.println(">>> MOVEMENT STOPPED <<<");
         
-        if (laptopConnected) {
+        // Send general completion message for manual stops
+        if (laptopConnected && !isDistanceMovement && moveDuration == 0) {
             String response = "MOVEMENT_COMPLETED";
             const char* responseCStr = response.c_str();
             pCharacteristic->setValue((uint8_t*)responseCStr, response.length());
             pCharacteristic->notify();
         }
+    }
+}
+
+void startDistanceMovement(int speed, float distance) {
+    if (!legoHub.isConnected()) {
+        Serial.println("ERROR: Hub not connected");
+        if (laptopConnected) {
+            String response = "ERROR:HUB_NOT_CONNECTED";
+            const char* responseCStr = response.c_str();
+            pCharacteristic->setValue((uint8_t*)responseCStr, response.length());
+            pCharacteristic->notify();
+        }
+        return;
+    }
+    
+    if (emergencyStopActive) {
+        Serial.println("ERROR: Emergency stop active");
+        if (laptopConnected) {
+            String response = "ERROR:EMERGENCY_STOP_ACTIVE";
+            const char* responseCStr = response.c_str();
+            pCharacteristic->setValue((uint8_t*)responseCStr, response.length());
+            pCharacteristic->notify();
+        }
+        return;
+    }
+    
+    stopCurrentMovement();
+    
+    motorSpeed = speed;
+    targetSpeed = speed;
+    moveStartTime = millis();
+    isMoving = true;
+    isDistanceMovement = true;
+    targetDistance = distance;
+    startDistance = sensorDistance; // Use current sensor distance as starting point
+    remainingDistance = distance;
+    totalMovements++;
+    
+    if (abs(speed) > maxSpeedUsed) {
+        maxSpeedUsed = abs(speed);
+    }
+    
+    legoHub.setBasicMotorSpeed(motorPort, speed);
+    
+    Serial.println("Started distance movement: Speed=" + String(speed) + ", Target=" + String(distance) + "cm, Start=" + String(startDistance, 2) + "cm");
+    
+    if (laptopConnected) {
+        String response = "DISTANCE_MOVEMENT_STARTED:SPEED:" + String(speed) + 
+                         ",TARGET:" + String(distance) + 
+                         ",START:" + String(startDistance, 2) + 
+                         ",MODE:" + (useClosedLoopDistance ? "SENSOR" : "TIME");
+        const char* responseCStr = response.c_str();
+        pCharacteristic->setValue((uint8_t*)responseCStr, response.length());
+        pCharacteristic->notify();
     }
 }
 
@@ -244,6 +426,8 @@ void startTimedMovement(int speed, unsigned long duration) {
     moveStartTime = millis();
     moveDuration = duration;
     isMoving = true;
+    isDistanceMovement = false; // This is timed movement, not distance
+    startDistance = sensorDistance; // Track starting distance for timed movements too
     totalMovements++;
     
     if (abs(speed) > maxSpeedUsed) {
@@ -255,7 +439,9 @@ void startTimedMovement(int speed, unsigned long duration) {
     Serial.println("Started timed movement: Speed=" + String(speed) + ", Duration=" + String(duration) + "ms");
     
     if (laptopConnected) {
-        String response = "MOVEMENT_STARTED:SPEED:" + String(speed) + ",DURATION:" + String(duration);
+        String response = "TIMED_MOVEMENT_STARTED:SPEED:" + String(speed) + 
+                         ",DURATION:" + String(duration) + 
+                         ",START_DISTANCE:" + String(sensorDistance, 2);
         const char* responseCStr = response.c_str();
         pCharacteristic->setValue((uint8_t*)responseCStr, response.length());
         pCharacteristic->notify();
@@ -268,6 +454,43 @@ void processCommand(String command) {
     if (command == "GET_STATUS") {
         sendStatusToLaptop();
         return;
+    }
+    else if (command == "GET_SENSOR_DATA") {
+        updateSensorData();
+        response = "SENSOR_DATA:DISTANCE:" + String(sensorDistance, 2) + 
+                  ",SPEED:" + String(sensorSpeed, 2) + 
+                  ",RPM:" + String(sensorRPM, 1) + 
+                  ",ROTATIONS:" + String(rotationInterruptCount / SENSOR_CHANGES_PER_ROTATION, 2);
+    }
+    else if (command == "DEBUG_DISTANCE") {
+        String debug = "DEBUG:START=" + String(startDistance, 2) + 
+                      ",CURRENT=" + String(sensorDistance, 2) + 
+                      ",TARGET=" + String(targetDistance, 2) + 
+                      ",MOVING=" + String(isMoving ? "YES" : "NO") + 
+                      ",DISTANCE_MODE=" + String(isDistanceMovement ? "YES" : "NO") + 
+                      ",TRAVELED=" + String(abs(sensorDistance - startDistance), 2);
+        response = debug;
+        Serial.println(">>> DISTANCE DEBUG: " + debug + " <<<");
+    }
+    else if (command == "RESET_SENSOR") {
+        rotationInterruptCount = 0;
+        rotationCount = 0;
+        sensorDistance = 0.0;
+        sensorSpeed = 0.0;
+        sensorRPM = 0.0;
+        previousRPMTime = millis();
+        response = "SENSOR_RESET";
+        Serial.println(">>> ROTATION SENSOR RESET <<<");
+    }
+    else if (command == "SENSOR_ENABLE") {
+        sensorEnabled = true;
+        response = "SENSOR_ENABLED";
+        Serial.println(">>> ROTATION SENSOR ENABLED <<<");
+    }
+    else if (command == "SENSOR_DISABLE") {
+        sensorEnabled = false;
+        response = "SENSOR_DISABLED";
+        Serial.println(">>> ROTATION SENSOR DISABLED <<<");
     }
     else if (command == "PING") {
         response = "PONG";
@@ -285,11 +508,18 @@ void processCommand(String command) {
         Serial.println(">>> EMERGENCY STOP CLEARED <<<");
     }
     else if (command == "INIT_SYSTEM") {
-        // Initialize system to known good state
         emergencyStopActive = false;
         stopCurrentMovement();
         response = "SYSTEM_INITIALIZED";
         Serial.println(">>> SYSTEM INITIALIZED <<<");
+    }
+    else if (command == "TOGGLE_DISTANCE_MODE") {
+        useClosedLoopDistance = !useClosedLoopDistance;
+        response = "DISTANCE_MODE:" + String(useClosedLoopDistance ? "SENSOR" : "TIME");
+        Serial.println(">>> DISTANCE MODE: " + String(useClosedLoopDistance ? "SENSOR_FEEDBACK" : "TIME_ESTIMATION") + " <<<");
+    }
+    else if (command == "GET_DISTANCE_MODE") {
+        response = "DISTANCE_MODE:" + String(useClosedLoopDistance ? "SENSOR" : "TIME");
     }
     else if (command.startsWith("MOTOR_SPEED_")) {
         int speed = command.substring(12).toInt();
@@ -318,13 +548,12 @@ void processCommand(String command) {
         }
     }
     else if (command.startsWith("MOVE_TIME_")) {
-        // Format: MOVE_TIME_5000_SPEED_50 (move for 5 seconds at speed 50)
         int timeIndex = command.indexOf("_SPEED_");
         if (timeIndex > 0) {
             unsigned long moveTime = command.substring(10, timeIndex).toInt();
             int speed = command.substring(timeIndex + 7).toInt();
             
-            if (moveTime > 0 && moveTime <= 300000 && speed >= -100 && speed <= 100) { // Max 5 minutes
+            if (moveTime > 0 && moveTime <= 300000 && speed >= -100 && speed <= 100) {
                 startTimedMovement(speed, moveTime);
                 response = "TIMED_MOVEMENT_STARTED";
             } else {
@@ -335,23 +564,28 @@ void processCommand(String command) {
         }
     }
     else if (command.startsWith("MOVE_DISTANCE_")) {
-        // Format: MOVE_DISTANCE_100_SPEED_50 (estimated distance in cm)
         int speedIndex = command.indexOf("_SPEED_");
         if (speedIndex > 0) {
             float distance = command.substring(14, speedIndex).toFloat();
             int speed = command.substring(speedIndex + 7).toInt();
             
-            if (distance > 0 && distance <= 1000 && speed >= -100 && speed <= 100) { // Max 10 meters
-                // Improved calculation: assume calibrated speed-to-distance ratio
-                // This can be calibrated based on actual train measurements
-                float speedFactor = 0.2; // cm per second per speed unit (adjustable)
-                unsigned long estimatedTime = (distance / (abs(speed) * speedFactor)) * 1000;
-                estimatedTime = constrain(estimatedTime, 100, 300000); // 0.1s to 5 minutes
-                
-                startTimedMovement(speed, estimatedTime);
-                totalDistance += distance;
-                
-                response = "DISTANCE_MOVEMENT_STARTED:EST_TIME:" + String(estimatedTime) + ",DISTANCE:" + String(distance);
+            if (distance > 0 && distance <= 1000 && speed >= -100 && speed <= 100) {
+                if (useClosedLoopDistance && sensorEnabled) {
+                    // Use sensor-based distance control
+                    startDistanceMovement(speed, distance);
+                    response = "SENSOR_DISTANCE_STARTED:DISTANCE:" + String(distance) + ",SPEED:" + String(speed);
+                } else {
+                    // Fall back to time-based estimation
+                    float speedFactor = 0.3; // Improved calibration factor (cm per second per speed unit)
+                    unsigned long estimatedTime = (distance / (abs(speed) * speedFactor)) * 1000;
+                    estimatedTime = constrain(estimatedTime, 100, 300000); // 0.1s to 5 minutes
+                    
+                    startTimedMovement(speed, estimatedTime);
+                    totalDistance += distance;
+                    
+                    response = "TIME_DISTANCE_STARTED:EST_TIME:" + String(estimatedTime) + 
+                              ",DISTANCE:" + String(distance) + ",SPEED:" + String(speed);
+                }
             } else {
                 response = "ERROR:INVALID_DISTANCE_OR_SPEED";
             }
@@ -379,20 +613,17 @@ void processCommand(String command) {
         String action = command.substring(10);
         
         if (action == "AUTO") {
-            // Return to automatic LED status
             manualLedActive = false;
             Serial.println("LED: Returning to automatic status mode");
             response = "ESP32_LED_AUTO_DONE";
         }
         else if (action == "OFF") {
-            // Turn off LED and return to automatic mode
             setRGBLed(0);
             manualLedActive = false;
             Serial.println("LED: Manual OFF - returning to automatic status mode");
             response = "ESP32_LED_OFF_DONE";
         }
         else {
-            // All other colors: activate manual control with timeout
             manualLedActive = true;
             manualLedStartTime = millis();
             
@@ -421,8 +652,16 @@ void processCommand(String command) {
         totalMoveTime = 0;
         maxSpeedUsed = 0;
         totalMovements = 0;
+        // Also reset sensor data
+        rotationInterruptCount = 0;
+        sensorDistance = 0.0;
+        // Reset distance movement tracking
+        isDistanceMovement = false;
+        targetDistance = 0.0;
+        startDistance = 0.0;
+        remainingDistance = 0.0;
         response = "STATS_RESET";
-        Serial.println(">>> STATISTICS RESET <<<");
+        Serial.println(">>> STATISTICS, SENSOR, AND DISTANCE TRACKING RESET <<<");
     }
     else if (command == "GET_BATTERY") {
         if (legoHub.isConnected()) {
@@ -448,7 +687,6 @@ void processCommand(String command) {
         response = "HUB_RECONNECTION_STARTED";
     }
     else if (command == "FORCE_HUB_CHECK") {
-        // Force check hub connection and send immediate status
         response = "HUB_CHECK:HUB_STATUS:" + String(legoHub.isConnected() ? "CONNECTED" : "DISCONNECTED");
         if (legoHub.isConnected()) {
             response += ",HUB_NAME:" + hubName;
@@ -456,6 +694,7 @@ void processCommand(String command) {
         Serial.println("Force hub check - Hub connected: " + String(legoHub.isConnected()));
     }
     else if (command == "GET_DETAILED_STATUS") {
+        updateSensorData();
         String detailedStatus = "DETAILED_STATUS:";
         detailedStatus += "HUB_CONNECTED:" + String(legoHub.isConnected() ? "true" : "false") + ",";
         detailedStatus += "HUB_NAME:" + hubName + ",";
@@ -464,10 +703,23 @@ void processCommand(String command) {
         detailedStatus += "MOTOR_SPEED:" + String(motorSpeed) + ",";
         detailedStatus += "IS_MOVING:" + String(isMoving ? "true" : "false") + ",";
         detailedStatus += "TOTAL_DISTANCE:" + String(totalDistance, 2) + ",";
+        detailedStatus += "SENSOR_DISTANCE:" + String(sensorDistance, 2) + ",";
+        detailedStatus += "SENSOR_SPEED:" + String(sensorSpeed, 2) + ",";
+        detailedStatus += "SENSOR_RPM:" + String(sensorRPM, 1) + ",";
         detailedStatus += "TOTAL_TIME:" + String(totalMoveTime / 1000) + ",";
         detailedStatus += "MAX_SPEED:" + String(maxSpeedUsed) + ",";
         detailedStatus += "TOTAL_MOVEMENTS:" + String(totalMovements) + ",";
-        detailedStatus += "EMERGENCY_STOP:" + String(emergencyStopActive ? "true" : "false");
+        detailedStatus += "EMERGENCY_STOP:" + String(emergencyStopActive ? "true" : "false") + ",";
+        detailedStatus += "SENSOR_ENABLED:" + String(sensorEnabled ? "true" : "false") + ",";
+        detailedStatus += "DISTANCE_MODE:" + String(useClosedLoopDistance ? "SENSOR" : "TIME") + ",";
+        detailedStatus += "DISTANCE_MOVEMENT:" + String(isDistanceMovement ? "true" : "false");
+        
+        if (isDistanceMovement) {
+            float traveledDistance = abs(sensorDistance - startDistance);
+            detailedStatus += ",TARGET_DISTANCE:" + String(targetDistance, 2) + 
+                            ",TRAVELED_DISTANCE:" + String(traveledDistance, 2) + 
+                            ",REMAINING_DISTANCE:" + String(targetDistance - traveledDistance, 2);
+        }
         
         const char* detailedCStr = detailedStatus.c_str();
         pCharacteristic->setValue((uint8_t*)detailedCStr, detailedStatus.length());
@@ -479,7 +731,6 @@ void processCommand(String command) {
     }
     
     if (response.length() > 0 && laptopConnected) {
-        // Ensure proper text transmission
         const char* responseCStr = response.c_str();
         pCharacteristic->setValue((uint8_t*)responseCStr, response.length());
         pCharacteristic->notify();
@@ -516,13 +767,32 @@ void initializeBLE() {
     Serial.println(">>> BLE ADVERTISING STARTED <<<");
 }
 
+void initializeRotationSensor() {
+    pinMode(ROTATION_SENSOR_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(ROTATION_SENSOR_PIN), rotationSensorISR, CHANGE);
+    
+    // Initialize sensor variables
+    rotationInterruptCount = 0;
+    rotationCount = 0;
+    sensorDistance = 0.0;
+    sensorSpeed = 0.0;
+    sensorRPM = 0.0;
+    previousRPMTime = millis();
+    lastInterruptTime = 0;
+    lastSensorUpdate = 0;
+    
+    Serial.println(">>> ROTATION SENSOR INITIALIZED ON PIN " + String(ROTATION_SENSOR_PIN) + " <<<");
+    Serial.println("Wheel radius: " + String(WHEEL_RADIUS * 100) + " cm");
+    Serial.println("Sensor changes per rotation: " + String(SENSOR_CHANGES_PER_ROTATION));
+}
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
     
-    Serial.println("\n>>> ESP32 LEGO TRAIN BRIDGE <<<");
-    Serial.println("Advanced Train Controller v2.0");
-    Serial.println("===============================");
+    Serial.println("\n>>> ESP32 LEGO TRAIN BRIDGE WITH ROTATION SENSOR <<<");
+    Serial.println("Advanced Train Controller v3.0");
+    Serial.println("================================================");
     
     pinMode(LED_RED, OUTPUT);
     pinMode(LED_GREEN, OUTPUT);
@@ -530,11 +800,18 @@ void setup() {
     
     // Initialize emergency stop as false
     emergencyStopActive = false;
-    
-    // Start with automatic LED status (not manual)
     manualLedActive = false;
     
+    // Initialize distance movement variables
+    isDistanceMovement = false;
+    targetDistance = 0.0;
+    startDistance = 0.0;
+    remainingDistance = 0.0;
+    
     setRGBLed(1); // Start with red
+    
+    // Initialize rotation sensor
+    initializeRotationSensor();
     
     initializeBLE();
     legoHub.init();
@@ -542,11 +819,28 @@ void setup() {
     Serial.println(">>> SETUP COMPLETE <<<");
     Serial.println("Emergency Stop: CLEAR");
     Serial.println("LED Control: Automatic");
+    Serial.println("Rotation Sensor: Enabled");
+    Serial.println("Distance Control: " + String(useClosedLoopDistance ? "Sensor Feedback" : "Time Estimation"));
     Serial.println("Waiting for connections...");
 }
 
 void loop() {
     updateLEDStatus();
+    
+    // Update sensor data periodically and send to laptop if connected
+    static unsigned long lastSensorDataUpdate = 0;
+    static unsigned long lastSensorDataSent = 0;
+    
+    if (millis() - lastSensorDataUpdate > 50) { // Update every 50ms for smoother data
+        updateSensorData();
+        lastSensorDataUpdate = millis();
+    }
+    
+    // Send sensor data to laptop every 200ms for real-time updates
+    if (laptopConnected && (millis() - lastSensorDataSent > 200)) {
+        sendSensorDataToLaptop();
+        lastSensorDataSent = millis();
+    }
     
     // Handle LEGO Hub connection
     if (legoHub.isConnecting() && !isInitialized) {
@@ -560,9 +854,8 @@ void loop() {
             
             isInitialized = true;
             
-            // Immediately send status update to laptop when hub connects
             if (laptopConnected) {
-                delay(100); // Small delay to ensure hub is fully ready
+                delay(100);
                 sendStatusToLaptop();
                 Serial.println("Hub connection status sent to laptop");
             }
@@ -570,8 +863,75 @@ void loop() {
     }
     
     // Check for timed movement completion
-    if (isMoving && moveDuration > 0) {
-        if (millis() - moveStartTime >= moveDuration) {
+    if (isMoving && moveDuration > 0 && !isDistanceMovement) {
+        unsigned long elapsed = millis() - moveStartTime;
+        
+        // Send progress update every 2 seconds for timed movements
+        static unsigned long lastTimedProgressUpdate = 0;
+        if (millis() - lastTimedProgressUpdate > 2000) {
+            if (laptopConnected) {
+                float elapsedSeconds = elapsed / 1000.0;
+                float totalSeconds = moveDuration / 1000.0;
+                float progressPercent = (elapsed / (float)moveDuration) * 100.0;
+                String progress = "TIMED_PROGRESS:ELAPSED:" + String(elapsedSeconds, 1) + 
+                                 ",TOTAL:" + String(totalSeconds, 1) + 
+                                 ",PROGRESS:" + String(progressPercent, 1) + 
+                                 ",DISTANCE:" + String(abs(sensorDistance - startDistance), 2);
+                const char* progressCStr = progress.c_str();
+                pCharacteristic->setValue((uint8_t*)progressCStr, progress.length());
+                pCharacteristic->notify();
+            }
+            lastTimedProgressUpdate = millis();
+        }
+        
+        // Check if time is up
+        if (elapsed >= moveDuration) {
+            stopCurrentMovement();
+        }
+    }
+    
+    // Check for distance-based movement completion
+    if (isMoving && isDistanceMovement && useClosedLoopDistance) {
+        float traveledDistance = abs(sensorDistance - startDistance);
+        remainingDistance = targetDistance - traveledDistance;
+        
+        // Debug output every second
+        static unsigned long lastDebugOutput = 0;
+        if (millis() - lastDebugOutput > 1000) {
+            Serial.println("Distance Control - Start: " + String(startDistance, 2) + 
+                          "cm, Current: " + String(sensorDistance, 2) + 
+                          "cm, Traveled: " + String(traveledDistance, 2) + 
+                          "cm, Target: " + String(targetDistance, 2) + 
+                          "cm, Remaining: " + String(remainingDistance, 2) + "cm");
+            lastDebugOutput = millis();
+        }
+        
+        // Send progress update every 2 seconds
+        static unsigned long lastProgressUpdate = 0;
+        if (millis() - lastProgressUpdate > 2000) {
+            if (laptopConnected) {
+                String progress = "DISTANCE_PROGRESS:TRAVELED:" + String(traveledDistance, 2) + 
+                                 ",REMAINING:" + String(remainingDistance, 2) + 
+                                 ",TARGET:" + String(targetDistance, 2) + 
+                                 ",PROGRESS:" + String((traveledDistance / targetDistance) * 100, 1) + 
+                                 ",START:" + String(startDistance, 2) + 
+                                 ",CURRENT:" + String(sensorDistance, 2);
+                const char* progressCStr = progress.c_str();
+                pCharacteristic->setValue((uint8_t*)progressCStr, progress.length());
+                pCharacteristic->notify();
+            }
+            lastProgressUpdate = millis();
+        }
+        
+        // Check if target distance reached (with small tolerance)
+        if (traveledDistance >= (targetDistance - 0.5)) { // 0.5cm tolerance
+            Serial.println("Target distance reached: " + String(traveledDistance, 2) + "/" + String(targetDistance, 2) + "cm");
+            stopCurrentMovement();
+        }
+        
+        // Safety timeout: stop if movement takes too long (max 10 minutes)
+        if (millis() - moveStartTime > 600000) {
+            Serial.println("Distance movement timeout - stopping");
             stopCurrentMovement();
         }
     }
@@ -584,12 +944,19 @@ void loop() {
         Serial.println("Laptop: " + String(laptopConnected ? "Connected" : "Disconnected"));
         Serial.println("Emergency: " + String(emergencyStopActive ? "ACTIVE" : "Clear"));
         Serial.println("LED Control: " + String(manualLedActive ? "Manual" : "Automatic"));
+        Serial.println("Distance Mode: " + String(useClosedLoopDistance ? "Sensor" : "Time"));
+        Serial.println("Sensor: Distance=" + String(sensorDistance, 1) + "cm, Speed=" + String(sensorSpeed, 1) + "cm/s, RPM=" + String(sensorRPM, 1));
         if (isMoving) {
-            Serial.println("Moving: Speed=" + String(motorSpeed) + ", Elapsed=" + String((millis() - moveStartTime) / 1000) + "s");
+            String moveType = isDistanceMovement ? "Distance" : "Timed";
+            Serial.println("Moving (" + moveType + "): Speed=" + String(motorSpeed) + ", Elapsed=" + String((millis() - moveStartTime) / 1000) + "s");
+            if (isDistanceMovement) {
+                float traveled = abs(sensorDistance - startDistance);
+                Serial.println("  Target: " + String(targetDistance, 1) + "cm, Traveled: " + String(traveled, 1) + "cm, Remaining: " + String(targetDistance - traveled, 1) + "cm");
+            }
         } else {
             Serial.println("Status: Stopped");
         }
-        Serial.println("Stats: Distance=" + String(totalDistance) + "cm, Time=" + String(totalMoveTime / 1000) + "s, Movements=" + String(totalMovements));
+        Serial.println("Stats: Estimated=" + String(totalDistance) + "cm, Actual=" + String(sensorDistance, 1) + "cm, Time=" + String(totalMoveTime / 1000) + "s");
         lastStatus = millis();
     }
     
