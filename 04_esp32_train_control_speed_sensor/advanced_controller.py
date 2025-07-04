@@ -1055,8 +1055,8 @@ enabling precise feedback and closed-loop control possibilities.""",
             
             for device in devices:
                 name = device.name if device.name else "Unknown Device"
-                if any(keyword in name.upper() for keyword in ["ESP32", "LEGO"]):
-                    esp32_devices.append(device)
+                # if any(keyword in name.upper() for keyword in ["ESP32", "LEGO"]):
+                esp32_devices.append(device)
                     
             self.root.after(0, lambda: self.update_device_list(esp32_devices))
             
