@@ -193,18 +193,11 @@ class EnhancedTrainController:
         self.speed_label = ttk.Label(speed_control_frame, text="0")
         self.speed_label.pack(side=tk.RIGHT)
         
-        # Quick control buttons including emergency stop
+        # Quick control buttons (REMOVED DUPLICATE EMERGENCY STOP BUTTON)
         quick_frame = ttk.Frame(speed_frame)
         quick_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        # Large emergency stop button first
-        emergency_stop_btn = tk.Button(quick_frame, text="🛑 EMERGENCY STOP", 
-                                     command=self.emergency_stop,
-                                     bg='red', fg='white', font=('Arial', 11, 'bold'),
-                                     height=2, width=15)
-        emergency_stop_btn.pack(side=tk.LEFT, padx=5)
-        
-        # Regular control buttons
+        # Regular control buttons only
         ttk.Button(quick_frame, text="⏹️ Stop", command=self.stop_motor).pack(side=tk.LEFT, padx=5)
         ttk.Button(quick_frame, text="⬅️ Reverse", command=lambda: self.set_speed(-50)).pack(side=tk.LEFT, padx=5)
         ttk.Button(quick_frame, text="▶️ Forward", command=lambda: self.set_speed(50)).pack(side=tk.LEFT, padx=5)
@@ -933,8 +926,8 @@ enabling precise feedback and closed-loop control possibilities.""",
                 current_time = datetime.now().strftime('%H:%M:%S.%f')[:-3]  # Include milliseconds
                 self.last_update_label.config(text=f"Last update: {current_time}")
             
-            # Don't call full update_gui_status for live data - too expensive
-            # The fast_gui_update_timer will handle the display updates
+            # Update last sensor update time for timeout detection
+            self.last_sensor_update_time = time.time()
             
         except Exception as e:
             self.log_message(f"Error updating sensor data: {e}", "ERROR")
@@ -1350,36 +1343,6 @@ enabling precise feedback and closed-loop control possibilities.""",
                 self.log_message(f"Log saved to {filename}")
         except Exception as e:
             self.log_message(f"Error saving log: {e}", "ERROR")
-    
-    def auto_refresh_timer(self):
-        if self.auto_refresh_var.get() and self.connected:
-            self.log_message("Auto-refresh: Requesting status...", "DEBUG")
-            self.refresh_status()
-        self.root.after(10000, self.auto_refresh_timer)
-        
-    def connection_monitor_timer(self):
-        current_time = time.time()
-        
-        if self.connected:
-            if current_time - self.last_ping_time > 15:
-                if not self.connection_lost:
-                    self.log_message("Connection timeout detected - ESP32 may have disconnected", "WARNING")
-                    self.connection_lost = True
-                    threading.Thread(target=self.check_connection_status, daemon=True).start()
-            
-            elif current_time - self.last_ping_time > self.ping_interval:
-                self.send_command("PING")
-        
-        self.root.after(3000, self.connection_monitor_timer)
-    
-    def check_connection_status(self):
-        try:
-            if self.client and not self.client.is_connected:
-                self.log_message("BLE connection lost - ESP32 disconnected", "ERROR")
-                self.root.after(0, self.on_disconnected)
-        except Exception as e:
-            self.log_message(f"Connection check failed: {e}", "ERROR")
-            self.root.after(0, self.on_disconnected)
         
     def update_status_display(self):
         if not hasattr(self, 'status_text'):
