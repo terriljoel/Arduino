@@ -806,77 +806,18 @@ build_exe.bat
 - Add error handling for all BLE operations
 - Include logging for all major operations
 - Organize code into logical functions/classes
-
-## 🤝 Contributing
-
-### **How to Contribute**
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/NewFeature`)
-3. Commit changes (`git commit -m 'Add NewFeature'`)
-4. Push to branch (`git push origin feature/NewFeature`)
-5. Open Pull Request
-
-### **Contribution Guidelines**
-- Follow existing code style
-- Add comments for new functionality
-- Test thoroughly before submitting
-- Update documentation for new features
-- Include example usage
-
-### **Bug Reports**
-Please include:
-- System configuration (OS, Python version, Arduino IDE)
-- Hardware setup (ESP32 model, sensor type)
-- Steps to reproduce
-- Expected vs actual behavior
-- Log files or error messages
-
-## 📄 License
-
-This project is open source. Please refer to the LICENSE file for details.
-
-## 🆘 Support
-
-### **Getting Help**
-- Check troubleshooting section first
-- Review code comments for implementation details
-- Open GitHub issue with detailed information
-- Join community discussions
-
+  
 ### **Common Resources**
 - **Arduino ESP32 Documentation**: [ESP32 Arduino Core](https://docs.espressif.com/projects/arduino-esp32/)
 - **Legoino Library**: [GitHub Repository](https://github.com/corneliusmunz/legoino)
 - **NimBLE Documentation**: [Arduino Library](https://github.com/h2zero/NimBLE-Arduino)
 - **Python BLE**: [Bleak Documentation](https://bleak.readthedocs.io/)
 
-## 🔮 Future Enhancements
 
-### **Planned Features**
-- **Multi-train Control**: Coordinate multiple trains simultaneously
-- **Track Mapping**: Use color sensors for automated track following
-- **Mobile App**: Android/iOS smartphone interface
-- **Web Interface**: Browser-based control panel
-- **Data Analytics**: Movement pattern analysis and optimization
-- **Voice Control**: Integration with voice assistants
-- **Computer Vision**: Camera-based train tracking
 
-### **Hardware Expansions**
-- **Additional Sensors**: Color, ultrasonic, gyroscope integration
-- **WiFi Connectivity**: Alternative to BLE for longer range
-- **Display Integration**: OLED displays for status information
-- **Sound Effects**: Speaker integration for train sounds
-- **Lighting Control**: LED strip control for ambient lighting
+**Project Location**: `04_esp32_train_control_speed_sensor/`
 
-### **Software Improvements**
-- **Machine Learning**: Predictive movement and optimization
-- **3D Visualization**: Real-time 3D track and train display
-- **Advanced Scripting**: Custom movement sequence programming
-- **Cloud Integration**: Remote monitoring and control
-- **Analytics Dashboard**: Performance metrics and history
+**Version**: 3.0
 
----
-
-- **Project Location**: `04_esp32_train_control_speed_sensor/`
-- **Version**: 3.0
-- **Last Updated**: 2024
-- **Made for TU Braunschweig IfEV Institute**
+**Last Updated**: 2024
+**This project is made for TU Braunschweig IfEV Institute**
