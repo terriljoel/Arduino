@@ -819,5 +819,4 @@ build_exe.bat
 
 **Version**: 3.0
 
-**Last Updated**: 2024
 **This project is made for TU Braunschweig IfEV Institute**
