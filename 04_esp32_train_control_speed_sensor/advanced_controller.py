@@ -141,12 +141,15 @@ class EnhancedTrainController:
         self.scan_btn = ttk.Button(btn_frame, text="🔍 Scan for ESP32", command=self.scan_for_esp32)
         self.scan_btn.pack(side=tk.LEFT, padx=5)
         
-        self.connect_btn = ttk.Button(btn_frame, text="🔗 Connect", command=self.connect_to_esp32, state=tk.DISABLED)
+        self.connect_btn = ttk.Button(btn_frame, text="Connect", command=self.connect_to_esp32, state=tk.DISABLED)
         self.connect_btn.pack(side=tk.LEFT, padx=5)
         
-        self.disconnect_btn = ttk.Button(btn_frame, text="🔌 Disconnect", command=self.disconnect_from_esp32, state=tk.DISABLED)
+        self.disconnect_btn = ttk.Button(btn_frame, text="Disconnect", command=self.disconnect_from_esp32, state=tk.DISABLED)
         self.disconnect_btn.pack(side=tk.LEFT, padx=5)
-        
+        self.disconnect_hub_btn = ttk.Button(btn_frame, text="Disconnect Hub", command=self.disconnect_hub)
+        self.disconnect_hub_btn.pack(side=tk.LEFT, padx=5)
+        self.connect_hub_btn = ttk.Button(btn_frame, text="Reconnect Hub", command=self.reconnect_hub)
+        self.connect_hub_btn.pack(side=tk.LEFT, padx=5)
         # Device list
         device_frame = ttk.LabelFrame(conn_tab, text="Available Devices")
         device_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -193,15 +196,15 @@ class EnhancedTrainController:
         self.speed_label = ttk.Label(speed_control_frame, text="0")
         self.speed_label.pack(side=tk.RIGHT)
         
-        # Quick control buttons (REMOVED DUPLICATE EMERGENCY STOP BUTTON)
+        # Quick control buttons 
         quick_frame = ttk.Frame(speed_frame)
         quick_frame.pack(fill=tk.X, padx=10, pady=5)
         
         # Regular control buttons only
         ttk.Button(quick_frame, text="⏹️ Stop", command=self.stop_motor).pack(side=tk.LEFT, padx=5)
-        ttk.Button(quick_frame, text="⬅️ Reverse", command=lambda: self.set_speed(-50)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(quick_frame, text="▶️ Forward", command=lambda: self.set_speed(50)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(quick_frame, text="⚡ Full Forward", command=lambda: self.set_speed(100)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(quick_frame, text="⬅️ Reverse", command=lambda: self.set_speed(-30)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(quick_frame, text="▶️ Forward", command=lambda: self.set_speed(30)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(quick_frame, text="⚡ Full Forward", command=lambda: self.set_speed(50)).pack(side=tk.LEFT, padx=5)
         
         # Speed adjustment buttons
         adjust_frame = ttk.Frame(speed_frame)
@@ -1244,9 +1247,10 @@ enabling precise feedback and closed-loop control possibilities.""",
     def debug_distance(self):
         self.send_command("DEBUG_DISTANCE")
     
-    # Control Functions (keeping existing ones)
+
     def on_speed_change(self, value):
         speed = int(float(value))
+        self.set_speed(speed)
         self.speed_label.config(text=str(speed))
         
     def set_speed(self, speed):
